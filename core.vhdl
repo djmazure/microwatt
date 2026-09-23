@@ -25,7 +25,9 @@ entity core is
         DCACHE_NUM_LINES : natural := 64;
         DCACHE_NUM_WAYS : natural := 2;
         DCACHE_TLB_SET_SIZE : natural := 64;
-        DCACHE_TLB_NUM_WAYS : natural := 2
+        DCACHE_TLB_NUM_WAYS : natural := 2;
+        -- lwarx/stcx. outcome decided by the memory system (see dcache.vhdl)
+        EXT_ATOMICS : boolean := false
         );
     port (
         clk          : in std_ulogic;
@@ -45,6 +47,10 @@ entity core is
         wishbone_data_out : out wishbone_master_out;
 
         wb_snoop_in     : in wishbone_master_out;
+
+        -- EXT_ATOMICS sideband on the data master (ignored/0 otherwise)
+        wb_data_reserve : out std_ulogic;
+        wb_data_sc_fail : in std_ulogic := '0';
 
 	dmi_addr	: in std_ulogic_vector(3 downto 0);
 	dmi_din	        : in std_ulogic_vector(63 downto 0);
@@ -483,7 +489,8 @@ begin
             NUM_WAYS => DCACHE_NUM_WAYS,
             TLB_SET_SIZE => DCACHE_TLB_SET_SIZE,
             TLB_NUM_WAYS => DCACHE_TLB_NUM_WAYS,
-            LOG_LENGTH => LOG_LENGTH
+            LOG_LENGTH => LOG_LENGTH,
+            EXT_ATOMICS => EXT_ATOMICS
             )
         port map (
             clk => clk,
@@ -496,6 +503,8 @@ begin
             wishbone_in => wishbone_data_in,
             wishbone_out => wishbone_data_out,
             snoop_in => wb_snoop_in,
+            ext_reserve => wb_data_reserve,
+            ext_sc_fail => wb_data_sc_fail,
             events => dcache_events,
             log_out => log_data(170 downto 151)
             );
