@@ -14,6 +14,10 @@ entity toplevel is
         HAS_FPU       : boolean  := true;
         HAS_BTC       : boolean  := false;
         ICACHE_NUM_LINES : natural := 64;
+        ICACHE_LINE_SIZE : natural := 64;
+        DCACHE_LINE_SIZE : natural := 64;
+        DCACHE_NUM_LINES : natural := 64;
+        DCACHE_NUM_WAYS  : natural := 2;
         LOG_LENGTH    : natural := 512;
 	DISABLE_FLATTEN_CORE : boolean := false;
         UART_IS_16550 : boolean  := true
@@ -75,6 +79,10 @@ begin
             HAS_FPU       => HAS_FPU,
             HAS_BTC       => HAS_BTC,
 	    ICACHE_NUM_LINES => ICACHE_NUM_LINES,
+            ICACHE_LINE_SIZE => ICACHE_LINE_SIZE,
+            DCACHE_LINE_SIZE => DCACHE_LINE_SIZE,
+            DCACHE_NUM_LINES => DCACHE_NUM_LINES,
+            DCACHE_NUM_WAYS  => DCACHE_NUM_WAYS,
             LOG_LENGTH    => LOG_LENGTH,
 	    DISABLE_FLATTEN_CORE => DISABLE_FLATTEN_CORE,
             UART0_IS_16550     => UART_IS_16550

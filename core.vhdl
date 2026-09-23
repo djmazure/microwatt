@@ -17,9 +17,11 @@ entity core is
         HAS_BTC : boolean := true;
 	ALT_RESET_ADDRESS : std_ulogic_vector(63 downto 0) := (others => '0');
         LOG_LENGTH : natural := 512;
+        ICACHE_LINE_SIZE : natural := 64;
         ICACHE_NUM_LINES : natural := 64;
         ICACHE_NUM_WAYS : natural := 2;
         ICACHE_TLB_SIZE : natural := 64;
+        DCACHE_LINE_SIZE : natural := 64;
         DCACHE_NUM_LINES : natural := 64;
         DCACHE_NUM_WAYS : natural := 2;
         DCACHE_TLB_SET_SIZE : natural := 64;
@@ -257,7 +259,7 @@ begin
         generic map(
             SIM => SIM,
             HAS_FPU => HAS_FPU,
-            LINE_SIZE => 64,
+            LINE_SIZE => ICACHE_LINE_SIZE,
             NUM_LINES => ICACHE_NUM_LINES,
             NUM_WAYS => ICACHE_NUM_WAYS,
             LOG_LENGTH => LOG_LENGTH
@@ -476,7 +478,7 @@ begin
     dcache_0: entity work.dcache
         generic map(
             SIM => SIM,
-            LINE_SIZE => 64,
+            LINE_SIZE => DCACHE_LINE_SIZE,
             NUM_LINES => DCACHE_NUM_LINES,
             NUM_WAYS => DCACHE_NUM_WAYS,
             TLB_SET_SIZE => DCACHE_TLB_SET_SIZE,
