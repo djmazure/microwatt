@@ -53,6 +53,8 @@ entity core is
         -- EXT_ATOMICS sideband on the data master (ignored/0 otherwise)
         wb_data_reserve : out std_ulogic;
         wb_data_sc_fail : in std_ulogic := '0';
+        -- Cache-inhibited attribute of the data master's beat (dcache ext_nc)
+        wb_data_nc      : out std_ulogic;
 
 	dmi_addr	: in std_ulogic_vector(3 downto 0);
 	dmi_din	        : in std_ulogic_vector(63 downto 0);
@@ -508,6 +510,7 @@ begin
             snoop_in => wb_snoop_in,
             ext_reserve => wb_data_reserve,
             ext_sc_fail => wb_data_sc_fail,
+            ext_nc => wb_data_nc,
             events => dcache_events,
             log_out => log_data(170 downto 151)
             );

@@ -6,6 +6,9 @@
 -- memory system's verdict is then ignored - that is the unpatched behaviour.
 -- DCBZ_ALLOC => false (default) drives dcache DCBZ_ALLOCATE; checks EXT8/9
 -- must FAIL with -gDCBZ_ALLOC=true (a dcbz miss then allocates the line).
+-- ADDR_RULE => false (default) observes the dcache's ext_nc; checks NC1-NC4
+-- must FAIL with -gADDR_RULE=true, which observes instead the rule a system
+-- has without ext_nc: real-mode I/O space, address bits 31:28 = 0xC.
 --
 -- The memory model below is the far-side oracle: it records every accepted
 -- Wishbone beat (we, adr, ext_reserve) and, for a reserved write, returns
@@ -21,7 +24,8 @@ use work.wishbone_types.all;
 entity dcache_ext_atomics_tb is
     generic (
         EXT : boolean := true;
-        DCBZ_ALLOC : boolean := false
+        DCBZ_ALLOC : boolean := false;
+        ADDR_RULE : boolean := false
         );
 end dcache_ext_atomics_tb;
 
@@ -40,6 +44,8 @@ architecture behave of dcache_ext_atomics_tb is
     signal snoop        : wishbone_master_out := wishbone_master_out_init;
     signal ext_reserve  : std_ulogic;
     signal ext_sc_fail  : std_ulogic := '0';
+    signal ext_nc       : std_ulogic;
+    signal nc_seen      : std_ulogic;            -- the nc a memory system would see
 
     constant clk_period : time := 10 ns;
 
@@ -49,6 +55,9 @@ architecture behave of dcache_ext_atomics_tb is
     signal n_res_reads  : natural := 0;          -- reads accepted with ext_reserve = 1
     signal n_writes     : natural := 0;
     signal n_res_writes : natural := 0;          -- writes accepted with ext_reserve = 1
+    signal n_nc_reads   : natural := 0;          -- reads accepted with nc_seen = 1
+    signal n_nc_writes  : natural := 0;          -- writes accepted with nc_seen = 1
+    signal wr_nc_hist   : std_ulogic_vector(1 downto 0) := "00";  -- nc of the last 2 writes, newest in 0
 
     function pattern(i : natural) return std_ulogic_vector is
         variable r : std_ulogic_vector(63 downto 0);
@@ -78,8 +87,12 @@ begin
             wishbone_out => wb_out,
             wishbone_in => wb_in,
             ext_reserve => ext_reserve,
-            ext_sc_fail => ext_sc_fail
+            ext_sc_fail => ext_sc_fail,
+            ext_nc => ext_nc
             );
+
+    nc_seen <= ext_nc when not ADDR_RULE else
+               '1' when wb_out.adr(28 downto 25) = "1100" else '0';
 
     clk_process: process
     begin
@@ -142,14 +155,22 @@ begin
                 report "mem: accept we=" & std_ulogic'image(wb_out.we) &
                     " dw=" & integer'image(p_adr) &
                     " sel=" & to_hstring(wb_out.sel) &
-                    " ext_reserve=" & std_ulogic'image(ext_reserve);
+                    " ext_reserve=" & std_ulogic'image(ext_reserve) &
+                    " nc=" & std_ulogic'image(nc_seen);
                 if wb_out.we = '1' then
                     n_writes <= n_writes + 1;
+                    wr_nc_hist <= wr_nc_hist(0) & nc_seen;
+                    if nc_seen = '1' then
+                        n_nc_writes <= n_nc_writes + 1;
+                    end if;
                     if ext_reserve = '1' then
                         n_res_writes <= n_res_writes + 1;
                     end if;
                 else
                     n_reads <= n_reads + 1;
+                    if nc_seen = '1' then
+                        n_nc_reads <= n_nc_reads + 1;
+                    end if;
                     if ext_reserve = '1' then
                         n_res_reads <= n_res_reads + 1;
                     end if;
@@ -166,7 +187,9 @@ begin
 
     stim: process
         variable reads0, res_reads0, writes0, res_writes0 : natural;
+        variable nc_reads0, nc_writes0 : natural;
         variable done : std_ulogic;
+        variable failed : std_ulogic;
         variable data : std_ulogic_vector(63 downto 0);
 
         procedure do_access(load, reserve : std_ulogic; addr : natural;
@@ -181,7 +204,8 @@ begin
             d_in.valid <= '1';
             wait until rising_edge(clk) and stall = '0';
             d_in.valid <= '0';
-            wait until rising_edge(clk) and d_out.valid = '1';
+            wait until rising_edge(clk) and (d_out.valid = '1' or d_out.error = '1');
+            failed := d_out.error;
             done := d_out.store_done;
             data := d_out.data;
             -- let the bus quiesce so the counters are final
@@ -197,10 +221,29 @@ begin
             d_in.dcbz <= '0';
         end procedure;
 
+        -- Put a translation in the dTLB, as the MMU does after a miss:
+        -- EA page -> real page 0, with the given no-cache (PTE bit 5, "I").
+        procedure load_tlb(ea : natural; nocache : std_ulogic) is
+            variable pte : std_ulogic_vector(63 downto 0) := (others => '0');
+        begin
+            pte(8) := '1';          -- reference
+            pte(7) := '1';          -- changed
+            pte(5) := nocache;
+            pte(2) := '1';          -- read permission
+            pte(1) := '1';          -- write permission
+            m_in.addr <= std_ulogic_vector(to_unsigned(ea, 64));
+            m_in.pte <= pte;
+            m_in.tlbld <= '1';
+            wait until rising_edge(clk);
+            m_in.tlbld <= '0';
+            wait until rising_edge(clk);
+        end procedure;
+
         procedure snapshot is
         begin
             reads0 := n_reads; res_reads0 := n_res_reads;
             writes0 := n_writes; res_writes0 := n_res_writes;
+            nc_reads0 := n_nc_reads; nc_writes0 := n_nc_writes;
         end procedure;
 
         constant A      : natural := 16#100#;   -- memory dword 32
@@ -343,6 +386,92 @@ begin
         assert n_reads - reads0 = 0 and data = x"0000000000000000"
             report "EXT9 FAIL: after dcbz hit, load missed or read " & to_hstring(data)
             severity failure;
+
+        -- NC1. A cache-inhibited instruction (lbzcix/ldcix: loadstore1 nc) to
+        --      an address OUTSIDE 0xC... is a cache-inhibited access: ext_nc.
+        --      Control first: the same kind of plain load is not.
+        report "NC1: ci load outside the I/O window is marked nc";
+        snapshot;
+        do_access('1', '0', 16#400#, (others => '0'), x"FF");
+        assert n_reads - reads0 >= 1 and n_nc_reads - nc_reads0 = 0
+            report "NC1 FAIL (control): a plain cacheable load was marked nc, or did not reach memory"
+            severity failure;
+        snapshot;
+        d_in.nc <= '1';
+        do_access('1', '0', 16#480#, (others => '0'), x"FF");
+        d_in.nc <= '0';
+        assert n_reads - reads0 = 1 and n_nc_reads - nc_reads0 = 1
+            report "NC1 FAIL: ldcix to 0x480 reached memory as " &
+            integer'image(n_nc_reads - nc_reads0) & " nc of " &
+            integer'image(n_reads - reads0) & " reads (want 1 of 1)" severity failure;
+
+        -- NC2. A cache-inhibited store (stdcix) outside 0xC... likewise.
+        report "NC2: ci store outside the I/O window is marked nc";
+        snapshot;
+        d_in.nc <= '1';
+        do_access('0', '0', 16#488#, STDATA, x"FF");
+        d_in.nc <= '0';
+        assert n_writes - writes0 = 1 and n_nc_writes - nc_writes0 = 1
+            report "NC2 FAIL: stdcix to 0x488 not a single nc write" severity failure;
+
+        -- NC3. Back-to-back stores in one page, std then stbcix: they share a
+        --      wishbone cycle, and each beat carries its own attribute.
+        report "NC3: std then stbcix pipelined - nc per beat";
+        snapshot;
+        d_in.load <= '0'; d_in.reserve <= '0'; d_in.byte_sel <= x"FF";
+        d_in.addr <= std_ulogic_vector(to_unsigned(16#4C0#, 64));
+        d_in.data <= x"1111111111111111";
+        d_in.valid <= '1';
+        wait until rising_edge(clk) and stall = '0';
+        d_in.nc <= '1';
+        d_in.addr <= std_ulogic_vector(to_unsigned(16#4C8#, 64));
+        wait until rising_edge(clk) and stall = '0';
+        d_in.data <= x"2222222222222222";     -- data of the 2nd, the cycle after it
+        d_in.valid <= '0';
+        d_in.nc <= '0';
+        for i in 1 to 12 loop
+            wait until rising_edge(clk);
+        end loop;
+        assert n_writes - writes0 = 2 and wr_nc_hist = "01"
+            report "NC3 FAIL: " & integer'image(n_writes - writes0) &
+            " writes, nc of (std, stbcix) = " & to_string(wr_nc_hist) & " (want 01)"
+            severity failure;
+
+        -- NC4. Virtual mode: the PTE's no-cache bit makes a plain load
+        --      cache-inhibited; a page without it stays cacheable (control).
+        report "NC4: no-cache page in virtual mode is marked nc";
+        d_in.virt_mode <= '1';
+        do_access('1', '0', 16#11500#, (others => '0'), x"FF");   -- dTLB miss
+        assert failed = '1'
+            report "NC4 FAIL (setup): expected a dTLB miss" severity failure;
+        load_tlb(16#11000#, '1');
+        do_access('1', '0', 16#21500#, (others => '0'), x"FF");   -- dTLB miss
+        load_tlb(16#21000#, '0');
+        snapshot;
+        do_access('1', '0', 16#21500#, (others => '0'), x"FF");
+        assert failed = '0' and n_reads - reads0 >= 1 and n_nc_reads - nc_reads0 = 0
+            report "NC4 FAIL (control): load from a cacheable page was marked nc or faulted"
+            severity failure;
+        snapshot;
+        do_access('1', '0', 16#11580#, (others => '0'), x"FF");
+        assert failed = '0' and n_reads - reads0 = 1 and n_nc_reads - nc_reads0 = 1
+            report "NC4 FAIL: load from a no-cache page reached memory as " &
+            integer'image(n_nc_reads - nc_reads0) & " nc of " &
+            integer'image(n_reads - reads0) & " reads (want 1 of 1)" severity failure;
+        d_in.virt_mode <= '0';
+
+        -- NC5. An EXT_ATOMICS lwarx is a non-allocating single read, but of
+        --      ordinary memory: ext_nc reports the storage, not the access
+        --      shape, so it stays 0 (while ext_reserve marks the read).
+        if EXT then
+            report "NC5: lwarx to memory is not marked nc";
+            snapshot;
+            do_access('1', '1', 16#4E0#, (others => '0'), x"FF");
+            assert n_res_reads - res_reads0 = 1 and n_nc_reads - nc_reads0 = 0
+                report "NC5 FAIL: lwarx read marked nc=" &
+                integer'image(n_nc_reads - nc_reads0) & " (want 0) with " &
+                integer'image(n_res_reads - res_reads0) & " reserved reads (want 1)" severity failure;
+        end if;
 
         report "dcache_ext_atomics_tb: ALL CHECKS PASSED";
         std.env.finish;

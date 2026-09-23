@@ -71,6 +71,14 @@ entity dcache is
         ext_reserve  : out std_ulogic;
         ext_sc_fail  : in std_ulogic := '0';
 
+        -- Storage attribute of the beat on wishbone_out: 1 when the access is
+        -- cache-inhibited (a ci-instruction, a no-cache page in virtual mode,
+        -- or real-mode I/O space), valid with each strobe. It is the access's
+        -- attribute even when the cache chooses a non-allocating access for
+        -- another reason (an EXT_ATOMICS lwarx), so a memory system can tell
+        -- device space from memory without decoding addresses.
+        ext_nc       : out std_ulogic;
+
         events       : out DcacheEventType;
 
         log_out      : out std_ulogic_vector(19 downto 0)
@@ -333,6 +341,7 @@ architecture rtl of dcache is
         op_flush   : std_ulogic;
         op_sync    : std_ulogic;
         nc         : std_ulogic;
+        nc_attr    : std_ulogic;    -- cache-inhibited storage (nc may also mean non-allocating)
         valid      : std_ulogic;
         dcbz       : std_ulogic;
         flush      : std_ulogic;
@@ -401,6 +410,7 @@ architecture rtl of dcache is
         write_tag        : std_ulogic;
         slow_valid       : std_ulogic;
         wb               : wishbone_master_out;
+        wb_nc            : std_ulogic;          -- ext_nc of the beat being strobed
         reloading        : std_ulogic;
         reload_tag       : cache_tag_t;
 	store_way        : way_t;
@@ -1204,6 +1214,7 @@ begin
     ext_reserve <= '1' when EXT_ATOMICS and r1.wb.cyc = '1' and r1.req.reserve = '1' and
                    (r1.state = NC_LOAD_WAIT_ACK or r1.state = DO_STCX or
                     r1.state = STCX_WAIT_ACK) else '0';
+    ext_nc <= r1.wb.cyc and r1.wb_nc;
 
     -- Return data for loads & completion control logic
     --
@@ -1546,6 +1557,7 @@ begin
                     req.op_flush := req_op_flush;
                     req.op_sync := req_op_sync;
                     req.nc := req_nc;
+                    req.nc_attr := req_nc;
                     if EXT_ATOMICS and r0.req.load = '1' and r0.req.reserve = '1' then
                         req.nc := '1';   -- non-allocating single access
                     end if;
@@ -1638,6 +1650,7 @@ begin
                     -- Keep track of our index and way for subsequent stores.
                     r1.store_index <= get_index(req.real_addr);
                     r1.store_row <= get_row(req.real_addr);
+                    r1.wb_nc <= req.nc_attr;
                     r1.end_row_ix <= get_row_of_line(get_row(req.real_addr)) - 1;
                     r1.reload_tag <= get_tag(req.real_addr);
                     r1.req.hit_reload <= '1';
@@ -1839,6 +1852,7 @@ begin
                             (req.reserve = '0' or r1.atomic_more = '1') then
                             if acks < 7 then
                                 r1.wb.stb <= '1';
+                                r1.wb_nc <= req.nc_attr;    -- a stbcix can follow a std
                                 stbs_done := false;
                                 r1.store_way <= req.hit_way;
                                 r1.store_ways <= req.hit_ways;
