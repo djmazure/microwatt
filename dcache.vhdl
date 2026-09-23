@@ -1432,6 +1432,10 @@ begin
                 r1.ls_valid <= '0';
                 r1.mmu_done <= '0';
                 r1.reloading <= '0';
+                -- Defined before the first reload: the hit-during-reload check
+                -- reads store_way in the reload's first cycle, before write_tag
+                -- has set it from replace_way.
+                r1.store_way <= to_unsigned(0, WAY_BITS);
                 r1.acks_pending <= to_unsigned(0, 3);
                 r1.stalled <= '0';
                 r1.dec_acks <= '0';
