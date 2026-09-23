@@ -87,9 +87,11 @@ entity soc is
         HAS_LITEETH        : boolean := false;
 	UART0_IS_16550     : boolean := true;
 	HAS_UART1          : boolean := false;
+        ICACHE_LINE_SIZE   : natural := 64;
         ICACHE_NUM_LINES   : natural := 64;
         ICACHE_NUM_WAYS    : natural := 2;
         ICACHE_TLB_SIZE    : natural := 64;
+        DCACHE_LINE_SIZE   : natural := 64;
         DCACHE_NUM_LINES   : natural := 64;
         DCACHE_NUM_WAYS    : natural := 2;
         DCACHE_TLB_SET_SIZE : natural := 64;
@@ -377,9 +379,11 @@ begin
 	    DISABLE_FLATTEN => DISABLE_FLATTEN_CORE,
 	    ALT_RESET_ADDRESS => ALT_RESET_ADDRESS,
             LOG_LENGTH => LOG_LENGTH,
+            ICACHE_LINE_SIZE => ICACHE_LINE_SIZE,
             ICACHE_NUM_LINES => ICACHE_NUM_LINES,
             ICACHE_NUM_WAYS => ICACHE_NUM_WAYS,
             ICACHE_TLB_SIZE => ICACHE_TLB_SIZE,
+            DCACHE_LINE_SIZE => DCACHE_LINE_SIZE,
             DCACHE_NUM_LINES => DCACHE_NUM_LINES,
             DCACHE_NUM_WAYS => DCACHE_NUM_WAYS,
             DCACHE_TLB_SET_SIZE => DCACHE_TLB_SET_SIZE,
