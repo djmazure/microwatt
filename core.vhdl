@@ -27,7 +27,9 @@ entity core is
         DCACHE_TLB_SET_SIZE : natural := 64;
         DCACHE_TLB_NUM_WAYS : natural := 2;
         -- lwarx/stcx. outcome decided by the memory system (see dcache.vhdl)
-        EXT_ATOMICS : boolean := false
+        EXT_ATOMICS : boolean := false;
+        -- false: a dcbz miss does not allocate (see dcache.vhdl)
+        DCBZ_ALLOCATE : boolean := true
         );
     port (
         clk          : in std_ulogic;
@@ -490,7 +492,8 @@ begin
             TLB_SET_SIZE => DCACHE_TLB_SET_SIZE,
             TLB_NUM_WAYS => DCACHE_TLB_NUM_WAYS,
             LOG_LENGTH => LOG_LENGTH,
-            EXT_ATOMICS => EXT_ATOMICS
+            EXT_ATOMICS => EXT_ATOMICS,
+            DCBZ_ALLOCATE => DCBZ_ALLOCATE
             )
         port map (
             clk => clk,

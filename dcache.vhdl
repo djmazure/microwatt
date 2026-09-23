@@ -41,7 +41,14 @@ entity dcache is
         --    system tracks that); the local reservation still requires a
         --    preceding lwarx to the same granule.
         -- When false (default) behaviour is unchanged and ext_reserve is 0.
-        EXT_ATOMICS : boolean := false
+        EXT_ATOMICS : boolean := false;
+        -- When false, a dcbz that misses zeroes memory WITHOUT allocating the
+        -- line (as a dcbz to a cache-inhibited page already does); a dcbz that
+        -- hits still zeroes the cached copy. For memory systems that track
+        -- which lines this cache holds from the loads it issues (e.g. an
+        -- OpenPiton L1.5 way-map), a line allocated by dcbz is invisible to
+        -- them and would never be invalidated.
+        DCBZ_ALLOCATE : boolean := true
         );
     port (
         clk          : in std_ulogic;
@@ -1704,8 +1711,14 @@ begin
                             -- dcbz is handled much like a load miss except
                             -- that we are writing to memory instead of reading
                             r1.state <= RELOAD_WAIT_ACK;
-                            r1.reloading <= not req.nc;
-                            r1.write_tag <= not req.nc and not req.is_hit;
+                            if DCBZ_ALLOCATE or req.is_hit = '1' then
+                                r1.reloading <= not req.nc;
+                                r1.write_tag <= not req.nc and not req.is_hit;
+                            else
+                                -- zero memory only, like a cache-inhibited dcbz
+                                r1.reloading <= '0';
+                                r1.write_tag <= '0';
+                            end if;
                             r1.wb.we <= '1';
                             r1.wb.cyc <= '1';
                             r1.wb.stb <= '1';

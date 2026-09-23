@@ -4,6 +4,8 @@
 -- Run with EXT => true (default): every check must pass.
 -- Run with EXT => false (-gEXT=false): the checks must FAIL, because the
 -- memory system's verdict is then ignored - that is the unpatched behaviour.
+-- DCBZ_ALLOC => false (default) drives dcache DCBZ_ALLOCATE; checks EXT8/9
+-- must FAIL with -gDCBZ_ALLOC=true (a dcbz miss then allocates the line).
 --
 -- The memory model below is the far-side oracle: it records every accepted
 -- Wishbone beat (we, adr, ext_reserve) and, for a reserved write, returns
@@ -18,7 +20,8 @@ use work.wishbone_types.all;
 
 entity dcache_ext_atomics_tb is
     generic (
-        EXT : boolean := true
+        EXT : boolean := true;
+        DCBZ_ALLOC : boolean := false
         );
 end dcache_ext_atomics_tb;
 
@@ -60,7 +63,8 @@ begin
             LINE_SIZE => 16,
             NUM_LINES => 4,
             NUM_WAYS => 1,
-            EXT_ATOMICS => EXT
+            EXT_ATOMICS => EXT,
+            DCBZ_ALLOCATE => DCBZ_ALLOC
             )
         port map(
             clk => clk,
@@ -186,6 +190,13 @@ begin
             end loop;
         end procedure;
 
+        procedure do_dcbz(addr : natural) is
+        begin
+            d_in.dcbz <= '1';
+            do_access('0', '0', addr, (others => '0'), x"FF");
+            d_in.dcbz <= '0';
+        end procedure;
+
         procedure snapshot is
         begin
             reads0 := n_reads; res_reads0 := n_res_reads;
@@ -301,6 +312,36 @@ begin
         do_access('0', '1', A, STDATA, x"0F");
         assert n_res_writes - res_writes0 = 1 and done = '1'
             report "EXT7 FAIL: snooped store killed the reservation locally (stcx. never asked memory)"
+            severity failure;
+
+        -- 8. dcbz on a line the cache does NOT hold zeroes memory and does not
+        --    allocate: the next load of that line must go to memory.
+        report "EXT8: dcbz (miss) zeroes memory without allocating";
+        snapshot;
+        do_dcbz(16#200#);
+        assert n_writes - writes0 = 2
+            report "EXT8 FAIL: dcbz of a 16 B line wrote " & integer'image(n_writes - writes0) &
+            " beats to memory (want 2)" severity failure;
+        snapshot;
+        do_access('1', '0', 16#208#, (others => '0'), x"FF");
+        assert n_reads - reads0 >= 1
+            report "EXT8 FAIL: load after a dcbz miss hit in the cache - dcbz allocated the line"
+            severity failure;
+        assert data = x"0000000000000000"
+            report "EXT8 FAIL: memory not zeroed by dcbz: " & to_hstring(data) severity failure;
+
+        -- 9. dcbz on a line the cache DOES hold zeroes the cached copy.
+        report "EXT9: dcbz (hit) zeroes the held line";
+        do_access('1', '0', 16#300#, (others => '0'), x"FF");   -- allocate by load
+        snapshot;
+        do_access('1', '0', 16#300#, (others => '0'), x"FF");
+        assert n_reads - reads0 = 0
+            report "EXT9 FAIL: setup - line 0x300 not held after a load" severity failure;
+        do_dcbz(16#300#);
+        snapshot;
+        do_access('1', '0', 16#308#, (others => '0'), x"FF");
+        assert n_reads - reads0 = 0 and data = x"0000000000000000"
+            report "EXT9 FAIL: after dcbz hit, load missed or read " & to_hstring(data)
             severity failure;
 
         report "dcache_ext_atomics_tb: ALL CHECKS PASSED";
