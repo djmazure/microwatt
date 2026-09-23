@@ -28,7 +28,20 @@ entity dcache is
         -- L1 DTLB log_2(page_size)
         TLB_LG_PGSZ : positive := 12;
         -- Non-zero to enable log data collection
-        LOG_LENGTH : natural := 0
+        LOG_LENGTH : natural := 0;
+        -- External atomics: the memory system, not this cache, decides
+        -- whether a stcx. succeeds (e.g. a coherent fabric whose L2 orders
+        -- stores from other cores). When true:
+        --  * lwarx always reads memory as a single non-allocating access
+        --    marked with ext_reserve, even if the line is cached, so the
+        --    memory system can set its reservation;
+        --  * stcx. is marked with ext_reserve and completes only at the
+        --    wishbone ack, failing iff ext_sc_fail = '1' with that ack;
+        --  * snooped stores no longer kill the local reservation (the memory
+        --    system tracks that); the local reservation still requires a
+        --    preceding lwarx to the same granule.
+        -- When false (default) behaviour is unchanged and ext_reserve is 0.
+        EXT_ATOMICS : boolean := false
         );
     port (
         clk          : in std_ulogic;
@@ -46,6 +59,10 @@ entity dcache is
 
         wishbone_out : out wishbone_master_out;
         wishbone_in  : in wishbone_slave_out;
+
+        -- EXT_ATOMICS sideband (qualifies wishbone_out; see generic)
+        ext_reserve  : out std_ulogic;
+        ext_sc_fail  : in std_ulogic := '0';
 
         events       : out DcacheEventType;
 
@@ -197,6 +214,7 @@ architecture rtl of dcache is
 		     STORE_WAIT_ACK,   -- Store wait ack
 		     NC_LOAD_WAIT_ACK, -- Non-cachable load wait ack
                      DO_STCX,          -- Check for stcx. validity
+                     STCX_WAIT_ACK,    -- EXT_ATOMICS: stcx. waits for the verdict
                      FLUSH_CYCLE);     -- Cycle for invalidating cache line
 
     --
@@ -872,6 +890,7 @@ begin
         end process;
     end generate;
 
+
     -- Cache tag RAM read port
     cache_tag_read : process(clk)
         variable index : index_t;
@@ -917,7 +936,8 @@ begin
     end process;
 
     -- Compare the previous cycle's snooped store address to the reservation
-    kill_rsrv <= '1' when (snoop_valid = '1' and reservation.valid = '1' and
+    -- With EXT_ATOMICS the memory system owns reservation loss.
+    kill_rsrv <= '1' when (not EXT_ATOMICS and snoop_valid = '1' and reservation.valid = '1' and
                            snoop_paddr(REAL_ADDR_BITS - 1 downto LINE_OFF_BITS) = reservation.addr)
                   else '0';
 
@@ -1145,6 +1165,8 @@ begin
                 end if;
             elsif nc = '1' and (is_hit = '1' or r0.req.reserve = '1') then
                 req_op_bad <= '1';
+            elsif EXT_ATOMICS and r0.req.load = '1' and r0.req.reserve = '1' then
+                req_op_load_miss <= '1';   -- lwarx always goes to memory
             elsif r0.req.load = '0' then
                 req_op_store <= '1';   -- includes dcbz
             else
@@ -1172,6 +1194,9 @@ begin
 
     -- Wire up wishbone request latch out of stage 1
     wishbone_out <= r1.wb;
+    ext_reserve <= '1' when EXT_ATOMICS and r1.wb.cyc = '1' and r1.req.reserve = '1' and
+                   (r1.state = NC_LOAD_WAIT_ACK or r1.state = DO_STCX or
+                    r1.state = STCX_WAIT_ACK) else '0';
 
     -- Return data for loads & completion control logic
     --
@@ -1463,7 +1488,11 @@ begin
                 if req_go = '1' and access_ok = '1' and r0.req.load = '1' and
                     r0.req.reserve = '1' and r0.req.atomic_first = '1' then
                     reservation.addr <= ra(REAL_ADDR_BITS - 1 downto LINE_OFF_BITS);
-                    reservation.valid <= req_is_hit and not req_snoop_hit;
+                    if EXT_ATOMICS then
+                        reservation.valid <= '0';   -- set when memory acks the lwarx
+                    else
+                        reservation.valid <= req_is_hit and not req_snoop_hit;
+                    end if;
                 end if;
 
                 -- Do invalidations from snooped stores to memory
@@ -1510,6 +1539,9 @@ begin
                     req.op_flush := req_op_flush;
                     req.op_sync := req_op_sync;
                     req.nc := req_nc;
+                    if EXT_ATOMICS and r0.req.load = '1' and r0.req.reserve = '1' then
+                        req.nc := '1';   -- non-allocating single access
+                    end if;
                     req.valid := req_go;
                     req.mmu_req := r0.mmu_req;
                     req.dcbz := r0.req.dcbz;
@@ -1831,6 +1863,9 @@ begin
 
 		    -- Got ack ? complete.
 		    if wishbone_in.ack = '1' then
+                        if EXT_ATOMICS and r1.req.reserve = '1' and r1.req.first_dw = '1' then
+                            reservation.valid <= '1';
+                        end if;
                         r1.state <= IDLE;
                         r1.full <= '0';
 			r1.slow_valid <= '1';
@@ -1857,6 +1892,14 @@ begin
                         -- If this is the first half of a stqcx., the second half
                         -- will fail also because the reservation is not valid.
                         r1.state <= IDLE;
+                    elsif EXT_ATOMICS then
+                        -- Present the store; the verdict arrives with the ack.
+                        assert r1.atomic_more = '0'
+                            report "stqcx. is not supported with EXT_ATOMICS" severity failure;
+                        if wishbone_in.stall = '0' then
+                            r1.wb.stb <= '1';
+                            r1.state <= STCX_WAIT_ACK;
+                        end if;
                     elsif wishbone_in.stall = '0' then
                         -- We have the wishbone, so now we can assert stb,
                         -- write the cache data RAM and complete the request
@@ -1872,6 +1915,26 @@ begin
                         -- With r1.atomic_more set, STORE_WAIT_ACK won't exit to
                         -- IDLE state until it sees the second half.
                         r1.state <= STORE_WAIT_ACK;
+                    end if;
+
+                when STCX_WAIT_ACK =>
+                    if wishbone_in.stall = '0' then
+                        r1.wb.stb <= '0';
+                    end if;
+                    if wishbone_in.ack = '1' then
+                        r1.full <= '0';
+                        r1.ls_valid <= '1';
+                        reservation.valid <= '0';
+                        if ext_sc_fail = '1' then
+                            r1.stcx_fail <= '1';
+                        else
+                            -- Memory accepted it: update our copy if we hold the line
+                            r1.write_bram <= r1.req.is_hit;
+                            r1.slow_valid <= '1';
+                        end if;
+                        r1.wb.cyc <= '0';
+                        r1.wb.stb <= '0';
+                        r1.state <= IDLE;
                     end if;
 
                 when FLUSH_CYCLE =>

@@ -57,7 +57,7 @@ endif
 
 VUNITARGS += -p10
 
-all = core_tb icache_tb dcache_tb dmi_dtm_tb \
+all = core_tb icache_tb dcache_tb dcache_ext_atomics_tb dmi_dtm_tb \
 	wishbone_bram_tb soc_reset_tb
 
 all: $(all)
@@ -102,7 +102,7 @@ $(unisim_lib): $(unisim_lib_files)
 	$(GHDL) -i --std=08 --work=unisim --workdir=$(unisim_dir) $^
 GHDLFLAGS += -P$(unisim_dir)
 
-soc_tbs = core_tb icache_tb dcache_tb dmi_dtm_tb wishbone_bram_tb
+soc_tbs = core_tb icache_tb dcache_tb dcache_ext_atomics_tb dmi_dtm_tb wishbone_bram_tb
 soc_flash_tbs = core_flash_tb
 soc_dram_tbs = dram_tb core_dram_tb
 
