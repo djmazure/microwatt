@@ -36,6 +36,9 @@ entity execute1 is
         interrupt_in : WritebackToExecute1Type;
 
         tb_ctrl : timebase_ctrl;
+        -- Value read from PIR (the core's CPU_INDEX unless the core's
+        -- pir_in port is driven, e.g. per tile in a multi-tile system)
+        cpu_index_in : in std_ulogic_vector(7 downto 0);
 
 	-- asynchronous
         l_out : out Execute1ToLoadstore1Type;
@@ -2036,7 +2039,7 @@ begin
         ctrl.heir when SPRSEL_HEIR,
         assemble_ctrl(ctrl, ex1.msr(MSR_PR)) when SPRSEL_CTRL,
         39x"0" & ctrl.dscr when SPRSEL_DSCR,
-        56x"0" & std_ulogic_vector(to_unsigned(CPU_INDEX, 8)) when SPRSEL_PIR,
+        56x"0" & cpu_index_in when SPRSEL_PIR,
         ctrl.ciabr when SPRSEL_CIABR,
         assemble_dexcr(ctrl, ex1.insn) when SPRSEL_DEXCR,
         assemble_xer(ex1.e.xerc, ctrl.xer_low) when SPRSEL_XER,
