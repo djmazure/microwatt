@@ -41,6 +41,11 @@ entity core is
         -- Global timebase control
         tb_ctrl      : in timebase_ctrl;
 
+        -- Value of PIR. Defaults to CPU_INDEX; a system that instantiates one
+        -- netlist for several cores drives it per core instead.
+        pir_in       : in std_ulogic_vector(7 downto 0) :=
+            std_ulogic_vector(to_unsigned(CPU_INDEX, 8));
+
 	-- Wishbone interface
         wishbone_insn_in  : in wishbone_slave_out;
         wishbone_insn_out : out wishbone_master_out;
@@ -402,6 +407,7 @@ begin
             clk => clk,
             rst => rst_ex1,
             tb_ctrl => tb_ctrl,
+            cpu_index_in => pir_in,
             flush_in => flush,
 	    busy_out => ex1_busy_out,
             e_in => decode2_to_execute1,
