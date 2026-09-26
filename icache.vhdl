@@ -61,6 +61,12 @@ entity icache is
 
         wb_snoop_in  : in wishbone_master_out := wishbone_master_out_init;
 
+        -- External invalidation of one index, all ways (e.g. a coherence
+        -- directory that names only the index). Only the index bits of
+        -- inval_idx_addr are used.
+        inval_idx_in   : in std_ulogic := '0';
+        inval_idx_addr : in real_addr_t := (others => '0');
+
         events       : out IcacheEventType;
         log_out      : out std_ulogic_vector(57 downto 0)
         );
@@ -647,6 +653,7 @@ begin
         variable snoop_addr : real_addr_t;
         variable snoop_cache_tags : cache_tags_set_t;
         variable replace_way : way_sig_t;
+        variable idx_kill : std_ulogic;
     begin
         if rising_edge(clk) then
             ev.icache_miss <= '0';
@@ -695,6 +702,16 @@ begin
                 end if;
                 snoop_index2 <= snoop_index;
 
+                -- An external index invalidation that names the line being
+                -- reloaded: that line must not become valid, whatever the
+                -- reload returns (it may have been read before the write
+                -- the invalidation announces).
+                idx_kill := '0';
+                if inval_idx_in = '1' and r.state /= IDLE and
+                    r.store_index = get_index(inval_idx_addr) then
+                    idx_kill := '1';
+                end if;
+
                 -- Process cache invalidations
                 if inval_in = '1' then
                     for i in index_t loop
@@ -710,6 +727,13 @@ begin
                             cache_valids(to_integer(snoop_index2))(i) <= '0';
                         end if;
                     end loop;
+                    if inval_idx_in = '1' then
+                        assert not is_X(inval_idx_addr) severity failure;
+                        cache_valids(to_integer(get_index(inval_idx_addr))) <= (others => '0');
+                    end if;
+                    if idx_kill = '1' then
+                        r.store_valid <= '0';
+                    end if;
                 end if;
 
 		-- Main state machine
@@ -774,7 +798,7 @@ begin
 			if is_last_row(r.store_row, r.end_row_ix) then
 			    -- Cache line is now valid
 			    cache_valids(to_integer(r.store_index))(to_integer(r.store_way)) <=
-                                r.store_valid and not inval_in;
+                                r.store_valid and not inval_in and not idx_kill;
 			    -- We are done
 			    r.state <= IDLE;
 			end if;

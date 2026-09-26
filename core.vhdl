@@ -50,6 +50,11 @@ entity core is
 
         wb_snoop_in     : in wishbone_master_out;
 
+        -- External I-cache invalidation of one index, all ways (icache
+        -- inval_idx_in); only the index bits of the address are used
+        icache_inval_idx  : in std_ulogic := '0';
+        icache_inval_addr : in real_addr_t := (others => '0');
+
         -- EXT_ATOMICS sideband on the data master (ignored/0 otherwise)
         wb_data_reserve : out std_ulogic;
         wb_data_sc_fail : in std_ulogic := '0';
@@ -286,6 +291,8 @@ begin
             wishbone_out => wishbone_insn_out,
             wishbone_in => wishbone_insn_in,
             wb_snoop_in => wb_snoop_in,
+            inval_idx_in => icache_inval_idx,
+            inval_idx_addr => icache_inval_addr,
             events => icache_events,
             log_out => log_data(100 downto 43)
             );
